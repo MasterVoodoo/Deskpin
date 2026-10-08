@@ -1,4 +1,5 @@
 mod auth;
+mod window;
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
@@ -27,14 +28,30 @@ fn write_cache(app: AppHandle, json: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri_plugin_window_state::StateFlags;
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init())
+        // Position and size only: restoring visibility could start the app hidden.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::POSITION | StateFlags::SIZE)
+                .build(),
+        )
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .manage(auth::AuthState::default())
+        .manage(window::ModeState::default())
+        .setup(|app| window::setup(app))
+        .on_window_event(window::on_window_event)
         .invoke_handler(tauri::generate_handler![
             auth::sign_in,
             auth::get_access_token,
             read_cache,
-            write_cache
+            write_cache,
+            window::toggle_mode,
+            window::get_mode,
+            window::hide_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running deskpin");

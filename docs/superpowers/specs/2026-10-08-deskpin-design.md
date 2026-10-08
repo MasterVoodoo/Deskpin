@@ -75,7 +75,7 @@ with no backend of its own.
     survives Win+D). Owner rather than child re-parenting, because a WebView2 window re-parented as
     a child loses reliable input.
   - Tray icon with Show/Hide, toggle mode, Quit. Closing the window hides it to tray.
-  - Global hotkeys: `Ctrl+Alt+Space` show/hide, `Ctrl+Alt+P` toggle mode.
+  - Global hotkeys: `Ctrl+Alt+D` show/hide, `Ctrl+Alt+P` toggle mode.
   - Autostart at login (Tauri autostart plugin).
   - Persist window position, size and mode (Tauri window-state plugin).
 
@@ -225,6 +225,6 @@ list grows large enough to matter.
 | Visible poll interval | 15 s |
 | Hidden poll interval | 60 s |
 | List/calendar-list refresh | 10 min |
-| Show/hide hotkey | `Ctrl+Alt+Space` |
+| Show/hide hotkey | `Ctrl+Alt+D` |
 | Mode toggle hotkey | `Ctrl+Alt+P` |
 | Default window size | 320×520 |

@@ -44,7 +44,10 @@ pub struct AuthState(Mutex<Option<(String, Instant)>>);
 impl AuthState {
     fn cached(&self) -> Option<String> {
         let guard = self.0.lock().unwrap();
-        guard.as_ref().filter(|(_, exp)| Instant::now() < *exp).map(|(t, _)| t.clone())
+        guard
+            .as_ref()
+            .filter(|(_, exp)| Instant::now() < *exp)
+            .map(|(t, _)| t.clone())
     }
 
     fn store(&self, token: &TokenResponse) {
@@ -126,7 +129,10 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String, 
                         return Ok(code);
                     }
                     Some(Ok(_)) => {
-                        respond(&mut stream, "Sign-in failed. Return to deskpin and try again.");
+                        respond(
+                            &mut stream,
+                            "Sign-in failed. Return to deskpin and try again.",
+                        );
                         return Err("sign-in failed: state mismatch".into());
                     }
                 }
@@ -162,7 +168,10 @@ async fn token_request(params: &[(&str, &str)]) -> Result<TokenResponse, String>
 }
 
 #[tauri::command]
-pub async fn sign_in(app: tauri::AppHandle, state: tauri::State<'_, AuthState>) -> Result<(), String> {
+pub async fn sign_in(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
+) -> Result<(), String> {
     let cfg = client();
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -171,7 +180,10 @@ pub async fn sign_in(app: tauri::AppHandle, state: tauri::State<'_, AuthState>) 
     let (csrf, _) = pkce_pair();
 
     app.opener()
-        .open_url(auth_url(&cfg.client_id, &redirect, &challenge, &csrf), None::<&str>)
+        .open_url(
+            auth_url(&cfg.client_id, &redirect, &challenge, &csrf),
+            None::<&str>,
+        )
         .map_err(|e| e.to_string())?;
 
     let code = tauri::async_runtime::spawn_blocking(move || wait_for_code(listener, &csrf))
@@ -197,7 +209,10 @@ pub async fn sign_in(app: tauri::AppHandle, state: tauri::State<'_, AuthState>) 
 }
 
 #[tauri::command]
-pub async fn get_access_token(force: bool, state: tauri::State<'_, AuthState>) -> Result<String, String> {
+pub async fn get_access_token(
+    force: bool,
+    state: tauri::State<'_, AuthState>,
+) -> Result<String, String> {
     if !force {
         if let Some(token) = state.cached() {
             return Ok(token);
@@ -239,7 +254,10 @@ mod tests {
     fn pkce_challenge_is_sha256_of_verifier() {
         let (verifier, challenge) = pkce_pair();
         assert_eq!(verifier.len(), 43);
-        assert_eq!(challenge, URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())));
+        assert_eq!(
+            challenge,
+            URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+        );
         assert_ne!(pkce_pair().0, verifier);
     }
 

@@ -12,9 +12,16 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "deskpin",
-        "width": 800,
-        "height": 600
+        "width": 320,
+        "height": 520,
+        "minWidth": 260,
+        "minHeight": 300,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": true
       }
     ],
     "security": {

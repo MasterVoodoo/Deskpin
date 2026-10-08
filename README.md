@@ -26,6 +26,6 @@ npm run tauri build   # installer in src-tauri/target/release/bundle/nsis/
 
 ## Use
 
-- `Ctrl+Alt+Space` show/hide, `Ctrl+Alt+P` toggle on-top / desktop mode.
+- `Ctrl+Alt+D` show/hide, `Ctrl+Alt+P` toggle on-top / desktop mode.
 - Closing the window hides it to the tray. Quit from the tray menu.
 - Priority: click the chip, or write `[P1]`/`P1`/`priority: high` in a task (e.g. via Gemini).
