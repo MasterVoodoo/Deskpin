@@ -19,9 +19,11 @@ const item = (e: CalEvent, start: Date | null, end: Date | null, phase: Phase): 
 });
 
 export function buildSchedule(events: CalEvent[], now: Date): ScheduleItem[] {
-  // The same event can arrive from several calendars (shared invites); keep the first.
-  const unique = [...new Map(events.map((e) => [e.id, e])).values()];
-  const live = unique.filter((e) => e.status !== 'cancelled' && !declined(e));
+  // The same event can arrive from several calendars (shared invites). Only my own calendar's copy
+  // carries my response, so a decline on any copy hides the event; then keep one copy per id.
+  const declinedIds = new Set(events.filter(declined).map((e) => e.id));
+  const unique = [...new Map(events.filter((e) => !declinedIds.has(e.id)).map((e) => [e.id, e])).values()];
+  const live = unique.filter((e) => e.status !== 'cancelled');
 
   const allDay = live.filter((e) => e.start.date).map((e) => item(e, null, null, 'allday'));
 

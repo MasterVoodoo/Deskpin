@@ -1,5 +1,5 @@
-import { writable, type Readable } from 'svelte/store';
-import { AuthRequiredError, type Google } from './google';
+import { get, writable, type Readable } from 'svelte/store';
+import { AuthRequiredError, HttpError, type Google } from './google';
 import { writePriority, type Priority } from './labels';
 import { dueFromKey, localDateKey } from './today';
 import type { Calendar, Snapshot, Task, TaskList, TaskPatch } from './types';
@@ -44,6 +44,9 @@ export function createSync(deps: SyncDeps) {
   let lastBeat = 0;
   let inFlight: Promise<void> | null = null;
   let again = false;
+  /** Bumped by every edit; a poll whose fetch overlapped an edit is stale and is discarded. */
+  let editSeq = 0;
+  let editChain: Promise<unknown> = Promise.resolve();
 
   async function fetchAll(): Promise<Snapshot> {
     const now = deps.now();
@@ -53,16 +56,43 @@ export function createSync(deps: SyncDeps) {
     }
     const [start, end] = dayBounds(now);
     const [taskGroups, eventGroups] = await Promise.all([
-      Promise.all(lists.map(async (l) => (await deps.google.listTasks(l.id)).map((t) => ({ ...t, listId: l.id })))),
-      Promise.all(calendars.map((c) => deps.google.listEvents(c.id, start, end))),
+      Promise.all(
+        lists.map(async (l) => {
+          try {
+            return (await deps.google.listTasks(l.id)).map((t) => ({ ...t, listId: l.id }));
+          } catch (e) {
+            // List deleted elsewhere: skip it and refresh the list of lists on the next poll.
+            if (e instanceof HttpError && e.status === 404) {
+              metaAt = -Infinity;
+              return [];
+            }
+            throw e;
+          }
+        }),
+      ),
+      // One unreadable calendar (e.g. calendar access not granted) must not stop task syncing.
+      // ponytail: a failing calendar shows no events for that poll; keep its last events if this flickers.
+      Promise.all(
+        calendars.map((c) =>
+          deps.google.listEvents(c.id, start, end).catch((e) => {
+            if (e instanceof AuthRequiredError) throw e;
+            return [];
+          }),
+        ),
+      ),
     ]);
     return { tasks: taskGroups.flat(), events: eventGroups.flat(), syncedAt: now.toISOString() };
   }
 
   async function runPoll() {
     state.update((s) => ({ ...s, status: 'syncing' }));
+    const seq = editSeq;
     try {
       const snapshot = await fetchAll();
+      if (seq !== editSeq) {
+        again = true; // an edit happened mid-fetch; this data may predate it
+        return;
+      }
       state.set({ snapshot, status: 'synced' });
       await deps.saveCache(snapshot).catch(() => {});
     } catch (e) {
@@ -124,13 +154,27 @@ export function createSync(deps: SyncDeps) {
     );
   }
 
-  /** Runs an API edit, then always re-polls so the view matches Google (reverting on failure). */
-  async function edit(apply: () => Promise<unknown>) {
-    try {
-      await apply();
-    } finally {
-      await poll();
-    }
+  /**
+   * Applies `optimistic` to the view now, then runs API edits one at a time and re-polls after each.
+   * On failure the view goes back to how it was before this edit, even if the re-poll also fails.
+   */
+  function edit(apply: () => Promise<unknown>, optimistic?: () => void): Promise<void> {
+    editSeq++;
+    const before = get(state).snapshot;
+    optimistic?.();
+    const run = editChain.then(async () => {
+      try {
+        await apply();
+      } catch (e) {
+        state.update((s) => ({ ...s, snapshot: before }));
+        throw e;
+      } finally {
+        editSeq++;
+        await poll();
+      }
+    });
+    editChain = run.catch(() => {});
+    return run;
   }
 
   return {
@@ -141,21 +185,26 @@ export function createSync(deps: SyncDeps) {
     setVisible,
 
     complete(t: Task, done: boolean) {
-      patchLocal(t.id, (x) => ({
-        ...x,
-        status: done ? 'completed' : 'needsAction',
-        completed: done ? deps.now().toISOString() : undefined,
-      }));
       const patch: TaskPatch = done ? { status: 'completed' } : { status: 'needsAction', completed: null };
-      return edit(() => deps.google.patchTask(t.listId, t.id, patch));
+      return edit(
+        () => deps.google.patchTask(t.listId, t.id, patch),
+        () =>
+          patchLocal(t.id, (x) => ({
+            ...x,
+            status: done ? 'completed' : 'needsAction',
+            completed: done ? deps.now().toISOString() : undefined,
+          })),
+      );
     },
 
     setPriority(t: Task, p: Priority) {
-      patchLocal(t.id, (x) => ({ ...x, notes: writePriority(x.notes, p) }));
-      return edit(async () => {
-        const fresh = await deps.google.getTask(t.listId, t.id);
-        await deps.google.patchTask(t.listId, t.id, { notes: writePriority(fresh.notes, p) });
-      });
+      return edit(
+        async () => {
+          const fresh = await deps.google.getTask(t.listId, t.id);
+          await deps.google.patchTask(t.listId, t.id, { notes: writePriority(fresh.notes, p) });
+        },
+        () => patchLocal(t.id, (x) => ({ ...x, notes: writePriority(x.notes, p) })),
+      );
     },
 
     update(t: Task, patch: { title?: string; notes?: string; dueKey?: string | null }) {

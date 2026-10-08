@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { get } from 'svelte/store';
 import { createSync, VISIBLE_MS, HIDDEN_MS, HEARTBEAT_MS, META_MS } from './sync';
-import { AuthRequiredError, type Google } from './google';
+import { AuthRequiredError, HttpError, type Google } from './google';
 import type { GTask, Snapshot, Task } from './types';
 
 const today = '2026-10-08T00:00:00.000Z';
@@ -191,5 +191,83 @@ describe('createSync', () => {
     const { sync, google } = await started();
     await sync.remove(asTask(t1));
     expect(google.deleteTask).toHaveBeenCalledWith('L1', 't1');
+  });
+
+  // Final review fixes
+  it('a failed edit while offline reverts the optimistic change', async () => {
+    const { sync, google } = await started();
+    google.patchTask.mockRejectedValueOnce(new TypeError('offline'));
+    google.listTasks.mockRejectedValue(new TypeError('offline'));
+    await expect(sync.complete(asTask(t1), true)).rejects.toThrow('offline');
+    expect(get(sync.state).snapshot!.tasks[0].status).toBe('needsAction');
+    expect(get(sync.state).status).toBe('offline');
+  });
+
+  it('a poll that started before an edit does not overwrite the optimistic change', async () => {
+    let server: GTask = { ...t1 };
+    const google = fakeGoogle();
+    google.listTasks.mockImplementation(async () => [{ ...server }]);
+    google.patchTask.mockImplementation(async (...args: unknown[]) => {
+      server = { ...server, ...(args[2] as Partial<GTask>) };
+      return server;
+    });
+    const { sync } = await started(google);
+
+    let release!: () => void;
+    google.listTasks.mockImplementationOnce(() => new Promise((r) => (release = () => r([{ ...t1 }]))));
+    void sync.poll(); // stale: will return the pre-edit task
+
+    const seen: string[] = [];
+    const unsub = sync.state.subscribe((s) => s.snapshot && seen.push(s.snapshot.tasks[0].status));
+    seen.length = 0;
+    const done = sync.complete(asTask(t1), true);
+    release();
+    await done;
+    unsub();
+    expect(seen).not.toContain('needsAction');
+    expect(get(sync.state).snapshot!.tasks[0].status).toBe('completed');
+  });
+
+  it('runs edits one at a time so rapid priority changes land in order', async () => {
+    let notes = 'call back';
+    const google = fakeGoogle([t1]);
+    let releaseFirst!: () => void;
+    google.getTask
+      .mockImplementationOnce(() => new Promise((r) => (releaseFirst = () => r({ ...t1, notes }))))
+      .mockImplementation(async () => ({ ...t1, notes }));
+    google.patchTask.mockImplementation(async (...args: unknown[]) => {
+      notes = (args[2] as { notes: string }).notes;
+      return { ...t1, notes };
+    });
+    const { sync } = await started(google);
+
+    const first = sync.setPriority(asTask(t1), 1);
+    const second = sync.setPriority(asTask(t1), 2);
+    await vi.advanceTimersByTimeAsync(0);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(notes).toBe('[P2]\ncall back');
+  });
+
+  it('a calendar that cannot be read does not stop task syncing', async () => {
+    const google = fakeGoogle([t1]);
+    google.listEvents.mockRejectedValue(new HttpError(403, 'forbidden'));
+    const { sync } = await started(google);
+    expect(get(sync.state).status).toBe('synced');
+    expect(get(sync.state).snapshot!.tasks).toHaveLength(1);
+  });
+
+  it('a deleted task list is skipped and the list of lists is refreshed next poll', async () => {
+    const google = fakeGoogle([t1]);
+    google.listTaskLists.mockResolvedValue([{ id: 'L1', title: 'My Tasks' }, { id: 'gone', title: 'Old' }]);
+    google.listTasks.mockImplementation(async (id: string) => {
+      if (id === 'gone') throw new HttpError(404, 'not found');
+      return [{ ...t1 }];
+    });
+    const { sync } = await started(google);
+    expect(get(sync.state).status).toBe('synced');
+    expect(get(sync.state).snapshot!.tasks).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(VISIBLE_MS);
+    expect(google.listTaskLists).toHaveBeenCalledTimes(2);
   });
 });

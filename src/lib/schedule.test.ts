@@ -41,6 +41,14 @@ describe('buildSchedule', () => {
     expect(items).toHaveLength(1);
   });
 
+  it('hides an event declined on one calendar even if another calendar copy is accepted', () => {
+    const items = buildSchedule([
+      ev('mtg', at(12), at(13), { attendees: [{ self: true, responseStatus: 'declined' }] }),
+      ev('mtg', at(12), at(13), { attendees: [{ self: true, responseStatus: 'accepted' }] }),
+    ], now);
+    expect(items).toEqual([]);
+  });
+
   it('labels events without a summary as (busy)', () => {
     expect(buildSchedule([ev('x', at(12), at(13), { summary: undefined })], now)[0].title).toBe('(busy)');
   });
