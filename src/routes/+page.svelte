@@ -1,156 +1,137 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from 'svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { createSync } from '$lib/sync';
+  import { buildToday } from '$lib/today';
+  import { buildSchedule } from '$lib/schedule';
+  import * as bridge from '$lib/tauri';
+  import Header from '$lib/components/Header.svelte';
+  import ScheduleStrip from '$lib/components/ScheduleStrip.svelte';
+  import TaskRow from '$lib/components/TaskRow.svelte';
 
-  let name = $state("");
-  let greetMsg = $state("");
+  const sync = createSync({
+    google: bridge.google,
+    now: () => new Date(),
+    loadCache: bridge.loadCache,
+    saveCache: bridge.saveCache,
+  });
+  const syncState = sync.state;
 
-  async function greet(event: Event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
+  let now = $state(new Date());
+  let mode = $state('top');
+  let showDone = $state(false);
+  let signingIn = $state(false);
+  let errors = $state<Record<string, string>>({});
+
+  const snapshot = $derived($syncState.snapshot);
+  const view = $derived(snapshot ? buildToday(snapshot.tasks, now) : { open: [], done: [] });
+  const schedule = $derived(snapshot ? buildSchedule(snapshot.events, now) : []);
+
+  /** Runs an action; on failure shows the message under the given key and returns false. */
+  async function guard(key: string, fn: () => Promise<unknown>): Promise<boolean> {
+    delete errors[key];
+    try {
+      await fn();
+      return true;
+    } catch (e) {
+      errors[key] = e instanceof Error ? e.message : String(e);
+      return false;
+    }
   }
+
+  async function signIn() {
+    signingIn = true;
+    await guard('signin', bridge.signIn);
+    signingIn = false;
+    await sync.poll();
+  }
+
+  onMount(() => {
+    const tick = setInterval(() => (now = new Date()), 30_000);
+    const unlisteners = [
+      bridge.onVisibility((v) => sync.setVisible(v)),
+      bridge.onMode((m) => (mode = m)),
+      getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+        if (focused) void sync.poll();
+      }),
+    ];
+    bridge.getMode().then((m) => (mode = m));
+    void sync.start();
+    return () => {
+      clearInterval(tick);
+      sync.stop();
+      unlisteners.forEach((p) => p.then((off) => off()));
+    };
+  });
 </script>
 
-<main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
+<main class="note">
+  <Header
+    {now}
+    status={$syncState.status}
+    syncedAt={snapshot?.syncedAt}
+    {mode}
+    onToggleMode={() => bridge.toggleMode()}
+    onHide={() => bridge.hideWindow()}
+  />
 
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
-  </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
+  {#if $syncState.status === 'auth'}
+    <div class="banner">
+      {snapshot ? 'Signed out of Google.' : 'Connect your Google account to see your tasks.'}
+      <button class="primary" onclick={signIn} disabled={signingIn}>
+        {signingIn ? 'Waiting for browser…' : snapshot ? 'Sign in again' : 'Sign in with Google'}
+      </button>
+      {#if errors.signin}<p class="err">{errors.signin}</p>{/if}
+    </div>
+  {/if}
 
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
+  <ScheduleStrip items={schedule} {now} onOpen={(url) => bridge.openUrl(url)} />
+
+  <section class="tasks">
+    <h2>Tasks</h2>
+    {#each view.open as task (task.id)}
+      <TaskRow {task} {now} error={errors[task.id]} onToggle={() => guard(task.id, () => sync.complete(task, true))} />
+    {:else}
+      {#if snapshot}<p class="empty">Nothing due today.</p>{/if}
+    {/each}
+
+    {#if view.done.length}
+      <button class="done-toggle" onclick={() => (showDone = !showDone)}>
+        {showDone ? '▾' : '▸'} Done today ({view.done.length})
+      </button>
+      {#if showDone}
+        {#each view.done as task (task.id)}
+          <TaskRow {task} {now} error={errors[task.id]} onToggle={() => guard(task.id, () => sync.complete(task, false))} />
+        {/each}
+      {/if}
+    {/if}
+  </section>
 </main>
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+  :global(html, body) {
+    margin: 0;
+    background: #fff7b1;
+    font: 13px/1.4 'Segoe UI', system-ui, sans-serif;
   }
-
-  a:hover {
-    color: #24c8db;
+  :global(button) { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  :global(h2) { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; margin: 8px 0 4px; }
+  :global(.err) { color: var(--red); font-size: 12px; margin: 2px 0 6px 22px; }
+  .note {
+    --ink: #3b3420;
+    --line: #e6d97a;
+    --red: #c0392b;
+    color: var(--ink);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    border: 1px solid var(--line);
+    overflow: hidden;
   }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
-
+  .banner { padding: 8px 10px; border-bottom: 1px solid var(--line); background: #fff1a0; }
+  .primary { margin-left: 6px; padding: 2px 8px; border-radius: 4px; background: var(--ink); color: #fff7b1; }
+  .tasks { flex: 1; overflow-y: auto; padding: 0 10px 8px; }
+  .empty { opacity: 0.6; }
+  .done-toggle { margin-top: 8px; opacity: 0.7; }
 </style>
