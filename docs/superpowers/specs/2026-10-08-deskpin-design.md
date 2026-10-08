@@ -70,8 +70,10 @@ with no backend of its own.
   - `sign_in()` / `sign_out()`.
   - Scopes: `https://www.googleapis.com/auth/tasks`, `https://www.googleapis.com/auth/calendar.readonly`.
 - **window.rs**:
-  - Mode toggle: *top* (`set_always_on_top(true)`) vs *desktop* (not topmost, re-parented to the
-    desktop `WorkerW` window so it stays visible on the desktop and survives Win+D).
+  - Mode toggle: *top* (`set_always_on_top(true)`) vs *desktop* (not topmost, owner set to the
+    desktop `Progman` window and sent to the bottom of the z-order, so it stays on the desktop and
+    survives Win+D). Owner rather than child re-parenting, because a WebView2 window re-parented as
+    a child loses reliable input.
   - Tray icon with Show/Hide, toggle mode, Quit. Closing the window hides it to tray.
   - Global hotkeys: `Ctrl+Alt+Space` show/hide, `Ctrl+Alt+P` toggle mode.
   - Autostart at login (Tauri autostart plugin).
@@ -162,8 +164,8 @@ Rust handles only what the webview cannot. All feature logic lives in TypeScript
 Google Tasks has no push notifications, and Calendar push requires a public HTTPS webhook, which
 contradicts the no-backend decision. deskpin therefore polls.
 
-- **Outgoing edits are instant:** every desktop change is sent to Google immediately, and the
-  affected list is re-fetched right after.
+- **Outgoing edits are instant:** every desktop change is applied optimistically in the UI where
+  possible (check off, priority), sent to Google immediately, and followed by a full re-poll.
 - **Incoming changes (from phone/Gemini):**
   - Every **15 s** while the widget is visible.
   - Every **60 s** while hidden in the tray.
