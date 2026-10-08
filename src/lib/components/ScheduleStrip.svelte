@@ -23,7 +23,7 @@
 <style>
   section { padding: 0 10px 6px; border-bottom: 1px solid var(--line); }
   .event { display: flex; gap: 8px; width: 100%; text-align: left; padding: 2px 0; }
-  .time { width: 44px; flex: none; font-variant-numeric: tabular-nums; opacity: 0.7; }
+  .time { width: 56px; flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; opacity: 0.7; }
   .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tag { font-size: 11px; opacity: 0.7; }
   .past { opacity: 0.4; }

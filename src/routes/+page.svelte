@@ -5,9 +5,14 @@
   import { buildToday } from '$lib/today';
   import { buildSchedule } from '$lib/schedule';
   import * as bridge from '$lib/tauri';
+  import { AuthRequiredError } from '$lib/google';
   import Header from '$lib/components/Header.svelte';
   import ScheduleStrip from '$lib/components/ScheduleStrip.svelte';
   import TaskRow from '$lib/components/TaskRow.svelte';
+  import TaskEditor from '$lib/components/TaskEditor.svelte';
+  import QuickAdd from '$lib/components/QuickAdd.svelte';
+  import { nextPriority, parsePriority } from '$lib/labels';
+  import type { Task } from '$lib/types';
 
   const sync = createSync({
     google: bridge.google,
@@ -22,6 +27,7 @@
   let showDone = $state(false);
   let signingIn = $state(false);
   let errors = $state<Record<string, string>>({});
+  let editing = $state<string | null>(null);
 
   const snapshot = $derived($syncState.snapshot);
   const view = $derived(snapshot ? buildToday(snapshot.tasks, now) : { open: [], done: [] });
@@ -34,10 +40,26 @@
       await fn();
       return true;
     } catch (e) {
-      errors[key] = e instanceof Error ? e.message : String(e);
+      errors[key] =
+        e instanceof AuthRequiredError
+          ? 'Signed out of Google. Sign in again to save.'
+          : e instanceof Error
+            ? e.message
+            : String(e);
       return false;
     }
   }
+
+  async function saveEdit(task: Task, patch: { title: string; notes: string; dueKey: string | null }) {
+    if (await guard(task.id, () => sync.update(task, patch))) editing = null;
+  }
+
+  async function deleteTask(task: Task) {
+    if (await guard(task.id, () => sync.remove(task))) editing = null;
+  }
+
+  const cycle = (task: Task) =>
+    guard(task.id, () => sync.setPriority(task, nextPriority(parsePriority(task.title, task.notes))));
 
   async function signIn() {
     signingIn = true;
@@ -90,7 +112,24 @@
   <section class="tasks">
     <h2>Tasks</h2>
     {#each view.open as task (task.id)}
-      <TaskRow {task} {now} error={errors[task.id]} onToggle={() => guard(task.id, () => sync.complete(task, true))} />
+      {#if editing === task.id}
+        <TaskEditor
+          {task}
+          error={errors[task.id]}
+          onSave={(p) => saveEdit(task, p)}
+          onDelete={() => deleteTask(task)}
+          onClose={() => (editing = null)}
+        />
+      {:else}
+        <TaskRow
+          {task}
+          {now}
+          error={errors[task.id]}
+          onToggle={() => guard(task.id, () => sync.complete(task, true))}
+          onCycle={() => cycle(task)}
+          onOpen={() => (editing = task.id)}
+        />
+      {/if}
     {:else}
       {#if snapshot}<p class="empty">Nothing due today.</p>{/if}
     {/each}
@@ -106,6 +145,8 @@
       {/if}
     {/if}
   </section>
+
+  <QuickAdd error={errors.add} onAdd={(title) => guard('add', () => sync.add(title))} />
 </main>
 
 <style>
