@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Emitter, Manager, WebviewWindow, Window, WindowEvent};
+#[cfg(not(debug_assertions))]
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -181,6 +182,8 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Only installed (release) builds start at login; dev runs must not register themselves.
+    #[cfg(not(debug_assertions))]
     let _ = app.autolaunch().enable();
     Ok(())
 }
